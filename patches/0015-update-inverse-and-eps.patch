@@ -1,0 +1,1244 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b874c33..c871154 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,13 +1,9 @@
+-# For Intel MKL, set MKLROOT=<MKL_path> when running cmake
+-#   e.g. MKLROOT=/opt/mkl/ cmake -S regenie_dir/ -B regenie_dir/build/
+-# For OpenBLAS, set OPENBLAS_ROOT=<OpenBLAS_path> when running cmake
+-#   note: it also requires lapacke library
+-# For static compilation on Linux systems, set STATIC=1 when running cmake
+-#   -> this excludes GLIBC
+-
+-
+ cmake_minimum_required(VERSION 3.13)
+ 
++if(POLICY CMP0167)
++  cmake_policy(SET CMP0167 OLD)
++endif()
++
+ # detect OS architecture
+ execute_process(
+   COMMAND uname -s
+@@ -26,64 +22,23 @@ include(CMakePackageConfigHelpers)
+ include(GNUInstallDirs)
+ 
+ # specify the C++ standard
+-set(CMAKE_CXX_STANDARD 11)
++set(CMAKE_CXX_STANDARD 14)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ set(CMAKE_CXX_EXTENSIONS OFF)  # Ensures -std=c++11
+ 
+ ######################################
+ ######## check input variables
+ 
+-# check BGEN_PATH
+-if("$ENV{BGEN_PATH}" STREQUAL "")
+-  message( FATAL_ERROR "Must specify path to BGEN library in 'BGEN_PATH'")
+-else()
+-  set(BGEN_PATH "$ENV{BGEN_PATH}" CACHE INTERNAL "Set BGEN library path")
+-  if (NOT EXISTS ${BGEN_PATH})
+-    message( FATAL_ERROR "Specified BGEN library directory '${BGEN_PATH}' does not exist")
+-  endif()
+-endif()
+-
+ # check for static compilation
+-if($ENV{STATIC})
++if(BUILD_SHARED_LIBS)
++  set(BUILD_STATIC OFF CACHE INTERNAL "Dynamic compilation")
++  set(Boost_USE_STATIC_LIBS OFF)
++else()
+   set(BUILD_STATIC ON CACHE INTERNAL "Static compilation")
++  set(Boost_USE_STATIC_LIBS ON)
+   message( STATUS "Static compilation mode")
+ endif()
+ 
+-# check Boost IOStreams
+-if($ENV{HAS_BOOST_IOSTREAM})
+-  set(HAS_BOOST_IOSTREAM 1 CACHE INTERNAL "Add Boost IO")
+-  set(RG_VERSION "${RG_VERSION}.gz" CACHE INTERNAL "Update version")
+-else()
+-  set(HAS_BOOST_IOSTREAM 0 CACHE INTERNAL "Skip Boost IO")
+-endif()
+-
+-# check MKL
+-if(NOT "$ENV{MKLROOT}" STREQUAL "")
+-  set(MKLROOT "$ENV{MKLROOT}" CACHE INTERNAL "Set MKL library path")
+-  if (NOT EXISTS ${MKLROOT})
+-    message( FATAL_ERROR "Specified MKL library directory '${MKLROOT}' does not exist")
+-  endif()
+-  message( STATUS "Will compile with Intel MKL library")
+-endif()
+-
+-# check HTSlib
+-if(NOT "$ENV{HTSLIB_PATH}" STREQUAL "")
+-  set(HTSLIB_PATH "$ENV{HTSLIB_PATH}" CACHE INTERNAL "Set HTSlib library path")
+-  if (NOT EXISTS ${HTSLIB_PATH})
+-    message( FATAL_ERROR "Specified HTSlib library directory '${HTSLIB_PATH}' does not exist")
+-  endif()
+-  message( STATUS "Will compile with HTSlib")
+-endif()
+-
+-# check OpenBLAS
+-if(NOT "$ENV{OPENBLAS_ROOT}" STREQUAL "")
+-  set(OPENBLAS_ROOT "$ENV{OPENBLAS_ROOT}" CACHE INTERNAL "Set OpenBLAS library path")
+-  if (NOT EXISTS ${OPENBLAS_ROOT})
+-    message( FATAL_ERROR "Specified OpenBLAS library directory '${OPENBLAS_ROOT}' does not exist")
+-  endif()
+-  message( STATUS "Will compile with OpenBLAS library")
+-endif()
+-
+ ######################################
+ ######## set flags and required libraries
+ 
+@@ -92,9 +47,10 @@ set(Boost_USE_STATIC_LIBS    ${BUILD_STATIC})
+ set(Boost_USE_DEBUG_LIBS     OFF)
+ set(Boost_USE_MULTITHREADED  ON)
+ set(Boost_USE_STATIC_RUNTIME OFF)
++set(MKLROOT "${CMAKE_PREFIX_PATH}")
+ 
+-# list each file specifically
+-add_executable(regenie
++# list each file specifically 
++add_executable(regenie 
+   ${CMAKE_SOURCE_DIR}/src/Data.cpp
+   ${CMAKE_SOURCE_DIR}/src/Files.cpp
+   ${CMAKE_SOURCE_DIR}/src/Geno.cpp
+@@ -116,32 +72,54 @@ add_executable(regenie
+   ${CMAKE_SOURCE_DIR}/src/cox_score.cpp
+   ${CMAKE_SOURCE_DIR}/src/cox_firth.cpp
+   )
+-target_include_directories(regenie PRIVATE ${CMAKE_SOURCE_DIR}/src)
++target_include_directories(regenie PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_PREFIX_PATH}/include)
+ 
+-set(CMAKE_CXX_FLAGS "-O3 -Wall -pedantic -ffast-math -Wno-unused-local-typedefs -Wno-deprecated-declarations -Wno-long-long -Wno-c11-extensions -fPIC")
+-add_definitions(-DVERSION_NUMBER="${RG_VERSION}")
++set(CMAKE_CXX_FLAGS "-O3 -Wall -pedantic -ffast-math -Wno-unused-local-typedefs -Wno-deprecated-declarations -Wno-long-long -fPIC")
+ 
++find_package(OpenMP REQUIRED)
++target_link_libraries(regenie OpenMP::OpenMP_CXX)
+ if("${UNAME_S}" STREQUAL "Linux")
+-  find_package(OpenMP REQUIRED)
+-  target_link_libraries(regenie PRIVATE OpenMP::OpenMP_CXX)
+   if(${BUILD_STATIC})
+-    target_link_options(regenie BEFORE PRIVATE -static-libgcc PRIVATE -static-libstdc++)
++    target_link_options(regenie BEFORE -static-libgcc -static-libstdc++)
+   endif()
+ elseif("${UNAME_S}" STREQUAL "Darwin")
+-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
++  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+ endif()
+ 
+-set(EXTERN_LIBS_PATH "${CMAKE_SOURCE_DIR}/external_libs")
+-target_include_directories(regenie PRIVATE ${EXTERN_LIBS_PATH}/)
++set(EXTERN_LIBS_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external_libs")
++target_include_directories(regenie PUBLIC ${EXTERN_LIBS_PATH}/)
++
++# for BGEN (choose static if present first)
++find_library(ZSTD_LIBRARY zstd REQUIRED)
++find_library(DB_LIBRARY 
++  NAMES libdb.a db 
++  REQUIRED
++  )
++find_library(SQLITE3_LIBRARY sqlite3 REQUIRED)
++find_package(Boost 
++  REQUIRED COMPONENTS system filesystem thread 
++  OPTIONAL_COMPONENTS iostreams
++  )
++find_library(BGEN_LIBRARY 
++  NAMES libbgen.a 
++  REQUIRED
++  )
++target_link_libraries(regenie ${ZSTD_LIBRARY} ${BGEN_LIBRARY} ${DB_LIBRARY} ${SQLITE3_LIBRARY} ${Boost_LIBRARIES})
++target_include_directories(regenie 
++  PUBLIC
++  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
++  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/genfile>
++  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/db>
++  $<INSTALL_INTERFACE:${BOOST_INCLUDEDIR}>
++  )
++add_definitions(${Boost_DEFINITIONS})
+ 
+-# BGEN library and its dependencies
+-find_library(ZSTD_LIBRARY libzstd.a HINTS "${BGEN_PATH}/build/3rd_party/zstd-1.1.0" REQUIRED)
+-find_library(DB_LIBRARY libdb.a HINTS "${BGEN_PATH}/build/db" REQUIRED)
+-find_library(SQLITE3_LIBRARY libsqlite3.a HINTS "${BGEN_PATH}/build/3rd_party/sqlite3" REQUIRED)
+-find_library(Boost_LIBRARY libboost.a HINTS "${BGEN_PATH}/build/3rd_party/boost_1_55_0" REQUIRED)
+-find_library(BGEN_LIBRARY libbgen.a HINTS "${BGEN_PATH}/build" REQUIRED)
+-target_link_libraries(regenie PRIVATE ${ZSTD_LIBRARY} ${BGEN_LIBRARY} ${DB_LIBRARY} ${SQLITE3_LIBRARY} ${Boost_LIBRARY})
+-target_include_directories(regenie PRIVATE ${BGEN_PATH} ${BGEN_PATH}/genfile/include/ ${BGEN_PATH}/3rd_party/boost_1_55_0/ ${BGEN_PATH}/3rd_party/zstd-1.1.0/lib ${BGEN_PATH}/db/include/ ${BGEN_PATH}/3rd_party/sqlite3)
++# Boost IO
++if(Boost_iostreams_FOUND) 
++  add_definitions(-DHAS_BOOST_IOSTREAM)
++  set(RG_VERSION "${RG_VERSION}.gz" CACHE INTERNAL "Update version")
++  message( STATUS "Will compile with Boost Iostreams library")
++endif()
+ 
+ # MVTNorm library
+ set(MVTN_PATH "${EXTERN_LIBS_PATH}/mvtnorm")
+@@ -150,7 +128,7 @@ add_custom_target(
+    COMMAND make
+    WORKING_DIRECTORY ${MVTN_PATH}
+ )
+-target_link_libraries(regenie PRIVATE ${MVTN_PATH}/libMvtnorm.a)
++target_link_libraries(regenie ${MVTN_PATH}/libMvtnorm.a)
+ add_dependencies(regenie libMvtnorm)
+ 
+ # QF library
+@@ -160,7 +138,7 @@ add_custom_target(
+    COMMAND make
+    WORKING_DIRECTORY ${QF_PATH}
+ )
+-target_link_libraries(regenie PRIVATE ${QF_PATH}/qf.a)
++target_link_libraries(regenie ${QF_PATH}/qf.a)
+ add_dependencies(regenie libqf)
+ 
+ # Quadpack library
+@@ -170,7 +148,7 @@ add_custom_target(
+    COMMAND make
+    WORKING_DIRECTORY ${QUAD_PATH}
+ )
+-target_link_libraries(regenie PRIVATE ${QUAD_PATH}/libquad.a)
++target_link_libraries(regenie ${QUAD_PATH}/libquad.a)
+ add_dependencies(regenie libquad)
+ 
+ # PGEN library
+@@ -180,12 +158,12 @@ add_custom_target(
+    COMMAND make
+    WORKING_DIRECTORY ${PGEN_PATH}
+ )
+-target_link_libraries(regenie PRIVATE ${PGEN_PATH}/pgenlib.a)
+-target_include_directories(regenie PRIVATE ${PGEN_PATH} ${PGEN_PATH}/simde/ ${PGEN_PATH}/include/)
++target_link_libraries(regenie ${PGEN_PATH}/pgenlib.a)
++target_include_directories(regenie PUBLIC ${PGEN_PATH} ${PGEN_PATH}/simde/ ${PGEN_PATH}/include/)
+ add_dependencies(regenie pgenlib)
+ 
+ # REMETA library
+-if(EXISTS ${HTSLIB_PATH})
++if(DEFINED HTSLIB_PATH)
+   set(REMETA_PATH "${EXTERN_LIBS_PATH}/remeta")
+   add_custom_target(
+      remeta
+@@ -209,91 +187,70 @@ if(EXISTS ${HTSLIB_PATH})
+ endif()
+ 
+ # Intel MKL
+-if(EXISTS ${MKLROOT})
++if(DEFINED MKLROOT) 
+   add_definitions(-DWITH_MKL -DEIGEN_USE_BLAS -DEIGEN_USE_LAPACKE)
+-  target_include_directories(regenie PRIVATE ${MKLROOT}/include/)
+-  if(${BUILD_STATIC}) # specify static libs
+-    find_library(MKL_LP64_LIB libmkl_intel_lp64.a 
+-      HINTS "${MKLROOT}/lib/intel64"
+-      "${MKLROOT}/lib" 
+-      REQUIRED)
+-    find_library(MKL_THREAD_LIB libmkl_gnu_thread.a 
+-      HINTS "${MKLROOT}/lib/intel64"
+-      "${MKLROOT}/lib" 
+-      REQUIRED)
+-    find_library(MKL_CORE_LIB libmkl_core.a 
+-      HINTS "${MKLROOT}/lib/intel64"
+-      "${MKLROOT}/lib" 
+-      REQUIRED)
+-    target_link_libraries(regenie PRIVATE "-Wl,--start-group" ${MKL_LP64_LIB} ${MKL_THREAD_LIB} ${MKL_CORE_LIB} "-Wl,--end-group" -lgomp)
+-  else() # use dynamic libs
+-    find_library(MKL_LP64_LIB mkl_intel_lp64 
+-      PATHS "${MKLROOT}/lib/intel64"
+-      "${MKLROOT}/lib" 
+-      REQUIRED)
++  target_include_directories(regenie PUBLIC ${MKLROOT}/include/)
++  find_library(MKL_LP64_LIB mkl_intel_lp64 
++    HINTS "${MKLROOT}/lib/intel64" 
++    "${MKLROOT}/lib" 
++    REQUIRED
++    )
++  if("${UNAME_S}" STREQUAL "Linux")
+     find_library(MKL_THREAD_LIB mkl_gnu_thread 
+-      PATHS "${MKLROOT}/lib/intel64"
++      HINTS "${MKLROOT}/lib/intel64" 
+       "${MKLROOT}/lib" 
+-      REQUIRED)
+-    find_library(MKL_CORE_LIB mkl_core 
+-      PATHS "${MKLROOT}/lib/intel64"
++      REQUIRED
++      )
++  elseif("${UNAME_S}" STREQUAL "Darwin")
++    find_library(MKL_THREAD_LIB mkl_intel_thread 
++      HINTS "${MKLROOT}/lib/intel64" 
+       "${MKLROOT}/lib" 
+-      REQUIRED)
+-    target_link_libraries(regenie PRIVATE "-Wl,--no-as-needed" ${MKL_LP64_LIB} ${MKL_THREAD_LIB} ${MKL_CORE_LIB} -lgomp)
++      REQUIRED
++      )
++  endif()
++  find_library(MKL_CORE_LIB mkl_core 
++    HINTS "${MKLROOT}/lib/intel64" 
++    "${MKLROOT}/lib" 
++    REQUIRED
++    )
++  if("${UNAME_S}" STREQUAL "Darwin")
++    target_link_libraries(regenie ${MKL_LP64_LIB} ${MKL_THREAD_LIB} ${MKL_CORE_LIB})
++  elseif(${BUILD_STATIC})
++    target_link_libraries(regenie "-Wl,--start-group" ${MKL_LP64_LIB} ${MKL_THREAD_LIB} ${MKL_CORE_LIB} "-Wl,--end-group" -lgomp)
++  else() # use dynamic libs
++    target_link_libraries(regenie "-Wl,--no-as-needed" ${MKL_LP64_LIB} ${MKL_THREAD_LIB} ${MKL_CORE_LIB} -lgomp)
+   endif()
+-elseif(EXISTS ${OPENBLAS_ROOT}) # OpenBLAS
+-  add_definitions(-DWITH_OPENBLAS -DEIGEN_USE_BLAS -DEIGEN_USE_LAPACKE)
+-  target_include_directories(regenie PRIVATE ${OPENBLAS_ROOT}/include/)
+-  find_library(LAPACK_LIB lapack REQUIRED)
+-  find_library(BLAS_LIB openblas HINTS "${OPENBLAS_ROOT}/lib/" REQUIRED)
+-  target_link_libraries(regenie PRIVATE ${LAPACK_LIB} -llapacke ${BLAS_LIB})
++  message( STATUS "Will compile with Intel MKL library")
+ endif()
+ 
+ # cxxopts (header-only)
+-target_include_directories(regenie PRIVATE ${EXTERN_LIBS_PATH}/cxxopts/include/)
++target_include_directories(regenie PUBLIC ${CMAKE_SOURCE_DIR}/external_libs/cxxopts/include/)
+ 
+ # LBFGS (header-only)
+-target_include_directories(regenie PRIVATE ${EXTERN_LIBS_PATH}/LBFGSpp/include/)
++target_include_directories(regenie PUBLIC ${CMAKE_SOURCE_DIR}/external_libs/LBFGSpp/include/)
+ 
+ # Eigen (header-only)
+-target_include_directories(regenie PRIVATE ${EXTERN_LIBS_PATH}/eigen-3.4.0/)
+-
+-# Boost IO
+-if(${HAS_BOOST_IOSTREAM})
+-  if("${UNAME_S}" STREQUAL "Darwin")
+-    find_library(BOOST_LIB_IO libboost_iostreams libboost_iostreams.a REQUIRED)
+-    target_link_libraries(regenie PRIVATE ${BOOST_LIB_IO})
+-  elseif(${BUILD_STATIC})
+-    find_library(BOOST_LIB_IO libboost_iostreams.a REQUIRED)
+-    target_link_libraries(regenie PRIVATE ${BOOST_LIB_IO})
+-  else()
+-    target_link_libraries(regenie PRIVATE -lboost_iostreams)
+-  endif()
+-  add_definitions(-DHAS_BOOST_IOSTREAM)
+-  message( STATUS "Will compile with Boost Iostreams library")
+-endif()
++target_include_directories(regenie PUBLIC ${CMAKE_SOURCE_DIR}/external_libs/eigen-3.4.0/)
+ 
+ # Other libraries
+-find_library(ZLIB_LIBRARY libz.a z REQUIRED)
+-find_library(M_LIB m REQUIRED)
+-find_library(DL_LIB dl REQUIRED)
++find_library(ZLIB_LIBRARY z REQUIRED)
++find_library(M_LIB m REQUIRED) 
++find_library(DL_LIB dl REQUIRED) 
+ if("${UNAME_S}" STREQUAL "Linux")
+   set(GFORTRAN_LIBRARY "-lgfortran")
+ elseif("${UNAME_S}" STREQUAL "Darwin")
+   find_library(GFORTRAN_LIBRARY gfortran REQUIRED)
+ endif()
+-target_link_libraries(
+-  regenie PRIVATE
+-  ${ZLIB_LIBRARY} ${M_LIB} ${DL_LIB} ${PTHREAD_LIB}
+-  ${GFORTRAN_LIBRARY}
+-)
++target_link_libraries(regenie ${ZLIB_LIBRARY} ${M_LIB} ${DL_LIB} ${PTHREAD_LIB} ${GFORTRAN_LIBRARY})
+ 
+-install(TARGETS regenie RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
++add_definitions(-DVERSION_NUMBER="${RG_VERSION}")
++install(TARGETS regenie RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} OPTIONAL)
+ message( STATUS "REGENIE v" ${RG_VERSION})
+ 
+-add_custom_target(full-clean
+-  COMMAND cd "${MVTN_PATH}" && make clean
+-  COMMAND cd "${QF_PATH}" && make clean
+-  COMMAND cd "${QUAD_PATH}" && make clean
+-  COMMAND cd "${PGEN_PATH}" && make clean
+-  )
++write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake COMPATIBILITY SameMajorVersion)
++install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake DESTINATION share/${PROJECT_NAME})
++
++set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
++set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
++set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
++include(CPack)
+diff --git a/Makefile b/Makefile
+index b0cc536..aa496e6 100755
+--- a/Makefile
++++ b/Makefile
+@@ -30,7 +30,7 @@ STATIC       := 0
+ 
+ # Use only if not set
+ CXX          ?= g++
+-CXXFLAGS      = -O3 -Wall -pedantic -ffast-math -std=c++11 -Wno-unused-local-typedefs -Wno-deprecated-declarations -Wno-long-long -Wno-c11-extensions -fPIC
++CXXFLAGS      = -O3 -Wall -pedantic -ffast-math -std=c++14 -Wno-unused-local-typedefs -Wno-deprecated-declarations -Wno-long-long -Wno-c11-extensions -fPIC
+ 
+ EFILE         = regenie
+ CFLAGS       ?=
+diff --git a/external_libs/mvtnorm/Makefile b/external_libs/mvtnorm/Makefile
+index ac3d389..38edafa 100644
+--- a/external_libs/mvtnorm/Makefile
++++ b/external_libs/mvtnorm/Makefile
+@@ -1,4 +1,4 @@
+-FLAG  =-O2 -DNDEBUG -fPIC
++FLAG  =-O3 -DNDEBUG -fPIC
+ AR   ?= ar
+ CXX  ?= g++
+ CC   ?= gcc
+diff --git a/external_libs/mvtnorm/mvt.f b/external_libs/mvtnorm/mvt.f
+index 2e47d8b..9311fa9 100644
+--- a/external_libs/mvtnorm/mvt.f
++++ b/external_libs/mvtnorm/mvt.f
+@@ -1,5 +1,5 @@
+ *
+-*    $Id: mvt.f 231 2011-11-07 13:48:07Z thothorn $
++*    $Id$
+ *
+       SUBROUTINE MVTDST( N, NU, LOWER, UPPER, INFIN, CORREL, DELTA, 
+      &                   MAXPTS, ABSEPS, RELEPS, ERROR, VALUE, INFORM )       
+@@ -19,7 +19,7 @@
+ *	Original source available from
+ *	http://www.math.wsu.edu/faculty/genz/software/fort77/mvtdstpack.f
+ *
+-*	This is version 7/10 with better support for 100 < dimension < 1000
++*	This is version 28/05/2013
+ *
+ *  Parameters
+ *
+@@ -51,7 +51,7 @@
+ *     INFORM INTEGER, termination status parameter:
+ *            if INFORM = 0, normal completion with ERROR < EPS;
+ *            if INFORM = 1, completion with ERROR > EPS and MAXPTS 
+-*                           function vaules used; increase MAXPTS to 
++*                           function values used; increase MAXPTS to 
+ *                           decrease ERROR;
+ *            if INFORM = 2, N > 1000 or N < 1.
+ *            if INFORM = 3, correlation matrix not positive semi-definite.
+@@ -63,8 +63,6 @@
+       COMMON /PTBLCK/IVLS
+       IVLS = 0
+ 
+-      CALL rndstart()
+-
+       IF ( N .GT. 1000 .OR. N .LT. 1 ) THEN
+          VALUE = 0
+          ERROR = 1
+@@ -83,15 +81,20 @@
+          ENDIF
+       ENDIF
+       
+-      CALL rndend()
+-      
+       END
+ *
+-      SUBROUTINE MVSUBR( N, W, NF, F )
++      SUBROUTINE MVSUBR( N, W, F )
+ *     
+ *     Integrand subroutine
+ *
+-      INTEGER N, NF, NUIN, INFIN(*), NL
++*
++*     Note that this was originally defined as 
++*         SUBROUTINE MVSUBR( N, W, NF, F )
++*     but Intel compilers icx/ipcx/ifx from oneAPI 2023.2.0 and oneMKL 2023.2.0
++*     reported NF as being unused. Removed NF from MVSUBR and later calls to FUNSUB
++*     2023/08/17
++*
++      INTEGER N, NUIN, INFIN(*), NL
+       DOUBLE PRECISION W(*),F(*), LOWER(*),UPPER(*), CORREL(*), DELTA(*)
+       PARAMETER ( NL = 1000 )
+       INTEGER INFI(NL), NU, ND, INFORM, NY 
+@@ -139,7 +142,6 @@
+ *  Code added to fix ND = 0 bug, 24/03/2009 ->
+             VL = 1
+ *  <- Code added to fix ND = 0 bug, 24/03/2009
+-
+          ELSE IF ( ND.EQ.1 .AND. ( NU.LT.1 .OR. ABS(DL(1)).EQ.0 ) ) THEN
+ *     
+ *           1-d case for normal or central t
+@@ -185,11 +187,9 @@
+                END IF
+                IF ( INFI(1) .NE. INFI(2) ) INFI(1) = 2
+                VL = 1
+-               ! IF ( INFI(1) .NE. 1 ) VL = MVSTDT( NU, B(1)-DL(1) ) 
+-               ! IF ( INFI(1) .NE. 0 ) VL = VL - MVSTDT( NU, A(1)-DL(1) )      
+ *  A(1), B(1) Bug Fixed, 28/05/2013
+                IF ( INFI(1) .NE. 1 ) VL = MVSTDT( NU, B(1) ) 
+-               IF ( INFI(1) .NE. 0 ) VL = VL - MVSTDT( NU, A(1) ) 
++               IF ( INFI(1) .NE. 0 ) VL = VL - MVSTDT( NU, A(1) )      
+                IF ( VL .LT. 0 ) VL = 0
+                ER = 2D-16
+             END IF
+@@ -510,165 +510,6 @@
+       END DO
+       END
+ *
+-      DOUBLE PRECISION FUNCTION MVPHI(Z)
+-*     
+-*     Normal distribution probabilities accurate to 1d-15.
+-*     Reference: J.L. Schonfelder, Math Comp 32(1978), pp 1232-1240. 
+-*     
+-      INTEGER I, IM
+-      DOUBLE PRECISION A(0:43), BM, B, BP, P, RTWO, T, XA, Z
+-      PARAMETER( RTWO = 1.414213562373095048801688724209D0, IM = 24 )
+-      SAVE A
+-      DATA ( A(I), I = 0, 43 )/
+-     &    6.10143081923200417926465815756D-1,
+-     &   -4.34841272712577471828182820888D-1,
+-     &    1.76351193643605501125840298123D-1,
+-     &   -6.0710795609249414860051215825D-2,
+-     &    1.7712068995694114486147141191D-2,
+-     &   -4.321119385567293818599864968D-3, 
+-     &    8.54216676887098678819832055D-4, 
+-     &   -1.27155090609162742628893940D-4,
+-     &    1.1248167243671189468847072D-5, 3.13063885421820972630152D-7,      
+-     &   -2.70988068537762022009086D-7, 3.0737622701407688440959D-8,
+-     &    2.515620384817622937314D-9, -1.028929921320319127590D-9,
+-     &    2.9944052119949939363D-11, 2.6051789687266936290D-11,
+-     &   -2.634839924171969386D-12, -6.43404509890636443D-13,
+-     &    1.12457401801663447D-13, 1.7281533389986098D-14, 
+-     &   -4.264101694942375D-15, -5.45371977880191D-16,
+-     &    1.58697607761671D-16, 2.0899837844334D-17, 
+-     &   -5.900526869409D-18, -9.41893387554D-19, 2.14977356470D-19, 
+-     &    4.6660985008D-20, -7.243011862D-21, -2.387966824D-21, 
+-     &    1.91177535D-22, 1.20482568D-22, -6.72377D-25, -5.747997D-24,
+-     &   -4.28493D-25, 2.44856D-25, 4.3793D-26, -8.151D-27, -3.089D-27, 
+-     &    9.3D-29, 1.74D-28, 1.6D-29, -8.0D-30, -2.0D-30 /       
+-*     
+-      XA = ABS(Z)/RTWO
+-      IF ( XA .GT. 100 ) THEN
+-         P = 0
+-      ELSE
+-         T = ( 8*XA - 30 ) / ( 4*XA + 15 )
+-         BM = 0
+-         B  = 0
+-         DO I = IM, 0, -1 
+-            BP = B
+-            B  = BM
+-            BM = T*B - BP  + A(I)
+-         END DO
+-         P = EXP( -XA*XA )*( BM - BP )/4
+-      END IF
+-      IF ( Z .GT. 0 ) P = 1 - P
+-      MVPHI = P
+-      END
+-*
+-      DOUBLE PRECISION FUNCTION MVPHNV(P)
+-*
+-*	ALGORITHM AS241  APPL. STATIST. (1988) VOL. 37, NO. 3
+-*
+-*	Produces the normal deviate Z corresponding to a given lower
+-*	tail area of P.
+-*
+-*	The hash sums below are the sums of the mantissas of the
+-*	coefficients.   They are included for use in checking
+-*	transcription.
+-*
+-      DOUBLE PRECISION SPLIT1, SPLIT2, CONST1, CONST2, 
+-     *     A0, A1, A2, A3, A4, A5, A6, A7, B1, B2, B3, B4, B5, B6, B7, 
+-     *     C0, C1, C2, C3, C4, C5, C6, C7, D1, D2, D3, D4, D5, D6, D7, 
+-     *     E0, E1, E2, E3, E4, E5, E6, E7, F1, F2, F3, F4, F5, F6, F7, 
+-     *     P, Q, R
+-      PARAMETER ( SPLIT1 = 0.425, SPLIT2 = 5,
+-     *            CONST1 = 0.180625D0, CONST2 = 1.6D0 )
+-*     
+-*     Coefficients for P close to 0.5
+-*     
+-      PARAMETER (
+-     *     A0 = 3.38713 28727 96366 6080D0,
+-     *     A1 = 1.33141 66789 17843 7745D+2,
+-     *     A2 = 1.97159 09503 06551 4427D+3,
+-     *     A3 = 1.37316 93765 50946 1125D+4,
+-     *     A4 = 4.59219 53931 54987 1457D+4,
+-     *     A5 = 6.72657 70927 00870 0853D+4,
+-     *     A6 = 3.34305 75583 58812 8105D+4,
+-     *     A7 = 2.50908 09287 30122 6727D+3,
+-     *     B1 = 4.23133 30701 60091 1252D+1,
+-     *     B2 = 6.87187 00749 20579 0830D+2,
+-     *     B3 = 5.39419 60214 24751 1077D+3,
+-     *     B4 = 2.12137 94301 58659 5867D+4,
+-     *     B5 = 3.93078 95800 09271 0610D+4,
+-     *     B6 = 2.87290 85735 72194 2674D+4,
+-     *     B7 = 5.22649 52788 52854 5610D+3 )
+-*     HASH SUM AB    55.88319 28806 14901 4439
+-*     
+-*     Coefficients for P not close to 0, 0.5 or 1.
+-*     
+-      PARAMETER (
+-     *     C0 = 1.42343 71107 49683 57734D0,
+-     *     C1 = 4.63033 78461 56545 29590D0,
+-     *     C2 = 5.76949 72214 60691 40550D0,
+-     *     C3 = 3.64784 83247 63204 60504D0,
+-     *     C4 = 1.27045 82524 52368 38258D0,
+-     *     C5 = 2.41780 72517 74506 11770D-1,
+-     *     C6 = 2.27238 44989 26918 45833D-2,
+-     *     C7 = 7.74545 01427 83414 07640D-4,
+-     *     D1 = 2.05319 16266 37758 82187D0,
+-     *     D2 = 1.67638 48301 83803 84940D0,
+-     *     D3 = 6.89767 33498 51000 04550D-1,
+-     *     D4 = 1.48103 97642 74800 74590D-1,
+-     *     D5 = 1.51986 66563 61645 71966D-2,
+-     *     D6 = 5.47593 80849 95344 94600D-4,
+-     *     D7 = 1.05075 00716 44416 84324D-9 )
+-*     HASH SUM CD    49.33206 50330 16102 89036
+-*
+-*	Coefficients for P near 0 or 1.
+-*
+-      PARAMETER (
+-     *     E0 = 6.65790 46435 01103 77720D0,
+-     *     E1 = 5.46378 49111 64114 36990D0,
+-     *     E2 = 1.78482 65399 17291 33580D0,
+-     *     E3 = 2.96560 57182 85048 91230D-1,
+-     *     E4 = 2.65321 89526 57612 30930D-2,
+-     *     E5 = 1.24266 09473 88078 43860D-3,
+-     *     E6 = 2.71155 55687 43487 57815D-5,
+-     *     E7 = 2.01033 43992 92288 13265D-7,
+-     *     F1 = 5.99832 20655 58879 37690D-1,
+-     *     F2 = 1.36929 88092 27358 05310D-1,
+-     *     F3 = 1.48753 61290 85061 48525D-2,
+-     *     F4 = 7.86869 13114 56132 59100D-4,
+-     *     F5 = 1.84631 83175 10054 68180D-5,
+-     *     F6 = 1.42151 17583 16445 88870D-7,
+-     *     F7 = 2.04426 31033 89939 78564D-15 )
+-*     HASH SUM EF    47.52583 31754 92896 71629
+-*     
+-      Q = ( 2*P - 1 )/2
+-      IF ( ABS(Q) .LE. SPLIT1 ) THEN
+-         R = CONST1 - Q*Q
+-         MVPHNV = Q*( ( ( ((((A7*R + A6)*R + A5)*R + A4)*R + A3)
+-     *                  *R + A2 )*R + A1 )*R + A0 )
+-     *            /( ( ( ((((B7*R + B6)*R + B5)*R + B4)*R + B3)
+-     *                  *R + B2 )*R + B1 )*R + 1 )
+-      ELSE
+-         R = MIN( P, 1 - P )
+-         IF ( R .GT. 0 ) THEN
+-            R = SQRT( -LOG(R) )
+-            IF ( R .LE. SPLIT2 ) THEN
+-               R = R - CONST2
+-               MVPHNV = ( ( ( ((((C7*R + C6)*R + C5)*R + C4)*R + C3)
+-     *                      *R + C2 )*R + C1 )*R + C0 ) 
+-     *                /( ( ( ((((D7*R + D6)*R + D5)*R + D4)*R + D3)
+-     *                      *R + D2 )*R + D1 )*R + 1 )
+-            ELSE
+-               R = R - SPLIT2
+-               MVPHNV = ( ( ( ((((E7*R + E6)*R + E5)*R + E4)*R + E3)
+-     *                      *R + E2 )*R + E1 )*R + E0 )
+-     *                /( ( ( ((((F7*R + F6)*R + F5)*R + F4)*R + F3)
+-     *                      *R + F2 )*R + F1 )*R + 1 )
+-            END IF
+-         ELSE
+-            MVPHNV = 9
+-         END IF
+-         IF ( Q .LT. 0 ) MVPHNV = - MVPHNV
+-      END IF
+-      END
+       DOUBLE PRECISION FUNCTION MVBVN( LOWER, UPPER, INFIN, CORREL )
+ *
+ *     A function for computing bivariate normal probabilities.
+@@ -821,13 +662,23 @@
+                XS = AS*(-X(I,NG)+1)**2/4
+                RS = SQRT( 1 - XS )
+                BVN = BVN + A*W(I,NG)*EXP( -(BS/XS + HK)/2 )
+-     +                    *( EXP( -HK*(1-RS)/(2*(1+RS)) )/RS 
++     +                    *( EXP( -HK*XS/(2*(1+RS)**2) )/RS 
+      +                       - ( 1 + C*XS*( 1 + D*XS ) ) )
+             END DO
+             BVN = -BVN/TWOPI
+          ENDIF
+-         IF ( R .GT. 0 ) BVN =  BVN + MVPHI( -MAX( H, K ) )
+-         IF ( R .LT. 0 ) BVN = -BVN + MAX( ZERO, MVPHI(-H) - MVPHI(-K) )     
++         IF ( R .GT. 0 ) THEN
++            BVN =  BVN + MVPHI( -MAX( H, K ) )
++         ELSE
++            BVN = -BVN 
++            IF ( K .GT. H ) THEN
++               IF ( H .LT. 0 ) THEN
++                  BVN = BVN + MVPHI(K)  - MVPHI(H) 
++               ELSE
++                  BVN = BVN + MVPHI(-H) - MVPHI(-K) 
++               ENDIF
++            ENDIF
++         ENDIF
+       ENDIF
+       MVBVU = BVN
+       END
+@@ -1070,114 +921,13 @@
+ *     P =  1 - K  I     exp(-t*t/2) t**(N-1) dt, for N >= 1.
+ *               N  0
+ *
+-      INTEGER I, N, NO
+-      DOUBLE PRECISION P, TWO, R, RO, LRP, LKN, MVPHNV, MVCHNC
+-      PARAMETER ( LRP = -.22579135264472743235D0, TWO = 2 )
+-*                 LRP =   LOG( SQRT( 2/PI ) )
+-      SAVE NO, LKN
+-      DATA NO / 0 /
+-      IF ( N .LE. 1 ) THEN
+-         R = -MVPHNV( P/2 )
+-      ELSE IF ( P .LT. 1 ) THEN
+-         IF ( N .EQ. 2 ) THEN
+-            R = SQRT( -2*LOG(P) )
+-         ELSE
+-            IF ( N .NE. NO ) THEN
+-               NO = N
+-               LKN = 0
+-               DO I = N-2, 2, -2
+-                  LKN = LKN - LOG( DBLE(I) )
+-               END DO
+-               IF ( MOD( N, 2 ) .EQ. 1 ) LKN = LKN + LRP
+-            END IF
+-            IF ( N .GE. -5*LOG(1-P)/4 ) THEN
+-               R = TWO/( 9*N )
+-               R = N*( -MVPHNV(P)*SQRT(R) + 1 - R )**3
+-               IF ( R .GT. 2*N+6 ) THEN
+-                  R = 2*( LKN - LOG(P) ) + ( N - 2 )*LOG(R)
+-               END IF
+-            ELSE
+-               R = EXP( ( LOG( (1-P)*N ) - LKN )*TWO/N )
+-            END IF
+-            R = SQRT(R)
+-            RO = R
+-            R = MVCHNC( LKN, N, P, R )
+-            IF ( ABS( R - RO ) .GT. 1D-6 ) THEN
+-               RO = R
+-               R = MVCHNC( LKN, N, P, R )
+-               IF ( ABS( R - RO ) .GT. 1D-6 ) R = MVCHNC( LKN, N, P, R )
+-            END IF
+-         END IF
+-      ELSE
+-         R = 0
+-      END IF
+-      MVCHNV = R
+-      END
+-*
+-      DOUBLE PRECISION FUNCTION MVCHNC( LKN, N, P, R )
+-*
+-*     Third order Schroeder correction to R for MVCHNV
+-*
+-      INTEGER I, N
+-      DOUBLE PRECISION P, R, LKN, DF, RR, RN, CHI, MVPHI
+-      DOUBLE PRECISION LRP, TWO, AL, DL, AI, BI, CI, DI, EPS
+-      PARAMETER ( LRP = -.22579135264472743235D0, TWO = 2, EPS = 1D-14 )
+-*                 LRP =   LOG( SQRT( 2/PI ) )
+-      RR = R*R
+-      IF ( N .LT. 2 ) THEN
+-         CHI = 2*MVPHI(-R)
+-      ELSE IF ( N .LT. 100 ) THEN
+-*
+-*        Use standard Chi series
+-*
+-         RN = 1
+-         DO I = N - 2, 2, -2
+-            RN = 1 + RR*RN/I
+-         END DO
+-         RR = RR/2
+-         IF ( MOD( N, 2 ) .EQ. 0 ) THEN
+-            CHI = EXP(       LOG(   RN ) - RR )
+-         ELSE
+-            CHI = EXP( LRP + LOG( R*RN ) - RR ) + 2*MVPHI(-R)
+-         ENDIF
+-      ELSE
+-         RR = RR/2
+-         AL = N/TWO
+-         CHI = EXP( -RR + AL*LOG(RR) + LKN + LOG(TWO)*( N - 2 )/2 )
+-         IF ( RR .LT. AL + 1 ) THEN 
+-*
+-*           Use Incomplete Gamma series
+-*
+-            DL = CHI
+-            DO I = 1, 1000
+-               DL = DL*RR/( AL + I ) 
+-               CHI = CHI + DL
+-               IF ( ABS( DL*RR/( AL + I + 1 - RR ) ) .LT. EPS ) GO TO 10
+-            END DO
+- 10         CHI = 1 - CHI/AL
+-         ELSE
+-*
+-*           Use Incomplete Gamma continued fraction
+-*
+-            BI = RR + 1 - AL
+-            CI = 1/EPS
+-            DI = BI
+-            CHI = CHI/BI 
+-            DO I = 1, 250
+-               AI = I*( AL - I )
+-               BI = BI + 2
+-               CI = BI + AI/CI
+-               IF ( CI .EQ. 0 ) CI = EPS 
+-               DI = BI + AI/DI
+-               IF ( DI .EQ. 0 ) DI = EPS 
+-               DL = CI/DI
+-               CHI = CHI*DL
+-               IF ( ABS( DL - 1 ) .LT. EPS ) GO TO 20
+-            END DO
+-         END IF
+-      END IF
+- 20   DF =  ( P - CHI )/EXP( LKN + ( N - 1 )*LOG(R) - RR )
+-      MVCHNC = R - DF*( 1 - DF*( R - ( N - 1 )/R )/2 )   
++
++      INTEGER N
++      DOUBLE PRECISION P, sqrtqchisqint, x
++      
++      x = sqrtqchisqint(N, P)
++      MVCHNV = x
++                
+       END
+ *
+       SUBROUTINE MVKBRV( NDIM, MINVLS, MAXVLS, NF, FUNSUB, 
+@@ -1224,6 +974,8 @@
+ *  FUNSUB  EXTERNALly declared user defined integrand subroutine.
+ *          It must have parameters ( NDIM, Z, NF, FUNVLS ), where 
+ *          Z is a real NDIM-vector and FUNVLS is a real NF-vector.
++*          TH NOTE: arg NF was removed because it was unused, see MVSUBR 
++*          definition
+ *                                     
+ *  ABSEPS  Required absolute accuracy.
+ *  RELEPS  Required relative accuracy.
+@@ -1250,67 +1002,6 @@
+      &     VARPRD, X(NLIM), R(NLIM), VK(NLIM), VALUES(FLIM), FS(FLIM)
+       PARAMETER ( ONE = 1 )
+       SAVE P, C, SAMPLS, NP, VAREST
+-      INFORM = 1
+-      INTVLS = 0
+-      VARPRD = 0
+-      IF ( MINVLS .GE. 0 ) THEN
+-         DO K = 1, NF
+-            FINEST(K) = 0
+-            VAREST(K) = 0
+-         END DO
+-         SAMPLS = MINSMP 
+-         DO I = MIN( NDIM, 10 ), PLIM
+-            NP = I
+-            IF ( MINVLS .LT. 2*SAMPLS*P(I) ) GO TO 10
+-         END DO
+-         SAMPLS = MAX( MINSMP, MINVLS/( 2*P(NP) ) )
+-      ENDIF
+- 10   VK(1) = ONE/P(NP)
+-      K = 1
+-      DO I = 2, NDIM
+-         IF ( I .LE. KLIM ) THEN
+-            K = MOD( C(NP, MIN(NDIM-1,KLIM-1))*DBLE(K), DBLE(P(NP)) )
+-            VK(I) = K*VK(1)
+-         ELSE
+-            VK(I) = INT( P(NP)*2**( DBLE(I-KLIM)/(NDIM-KLIM+1) ) )
+-            VK(I) = MOD( VK(I)/P(NP), ONE )
+-         END IF
+-      END DO
+-      DO K = 1, NF
+-         FINVAL(K) = 0
+-         VARSQR(K) = 0
+-      END DO
+-*
+-      DO I = 1, SAMPLS
+-         CALL MVKRSV( NDIM,KLIM,VALUES, P(NP),VK, NF,FUNSUB, X,R,PR,FS )
+-         DO K = 1, NF
+-            DIFINT = ( VALUES(K) - FINVAL(K) )/I
+-            FINVAL(K) = FINVAL(K) + DIFINT
+-            VARSQR(K) = ( I - 2 )*VARSQR(K)/I + DIFINT**2
+-         END DO
+-      END DO
+-*
+-      INTVLS = INTVLS + 2*SAMPLS*P(NP)
+-      KMX = 1
+-      DO K = 1, NF
+-         VARPRD = VAREST(K)*VARSQR(K)
+-         FINEST(K) = FINEST(K) + ( FINVAL(K) - FINEST(K) )/( 1+VARPRD )      
+-         IF ( VARSQR(K) .GT. 0 ) VAREST(K) = ( 1 + VARPRD )/VARSQR(K)
+-         IF ( ABS(FINEST(K)) .GT. ABS(FINEST(KMX)) ) KMX = K
+-      END DO
+-      ABSERR = 7*SQRT( VARSQR(KMX)/( 1 + VARPRD ) )/2
+-      IF ( ABSERR .GT. MAX( ABSEPS, ABS(FINEST(KMX))*RELEPS ) ) THEN
+-         IF ( NP .LT. PLIM ) THEN
+-            NP = NP + 1
+-         ELSE
+-            SAMPLS = MIN( 3*SAMPLS/2, ( MAXVLS - INTVLS )/( 2*P(NP) ) ) 
+-            SAMPLS = MAX( MINSMP, SAMPLS )
+-         ENDIF
+-         IF ( INTVLS + 2*SAMPLS*P(NP) .LE. MAXVLS ) GO TO 10
+-      ELSE
+-         INFORM = 0
+-      ENDIF
+-      MINVLS = INTVLS
+ *
+ *    Optimal Parameters for Lattice Rules
+ *
+@@ -1450,6 +1141,68 @@
+      & 144595, 907454, 689648, 4*687580, 978368, 687580, 552742, 105195, 
+      & 942843, 768249, 4*307142, 7*880619, 11*117185, 11*60731,  
+      & 4*178309, 8*74373, 3*214965/
++*
++      INFORM = 1
++      INTVLS = 0
++      VARPRD = 0
++      IF ( MINVLS .GE. 0 ) THEN
++         DO K = 1, NF
++            FINEST(K) = 0
++            VAREST(K) = 0
++         END DO
++         SAMPLS = MINSMP 
++         DO I = MIN( NDIM, 10 ), PLIM
++            NP = I
++            IF ( MINVLS .LT. 2*SAMPLS*P(I) ) GO TO 10
++         END DO
++         SAMPLS = MAX( MINSMP, MINVLS/( 2*P(NP) ) )
++      ENDIF
++ 10   VK(1) = ONE/P(NP)
++      K = 1
++      DO I = 2, NDIM
++         IF ( I .LE. KLIM ) THEN
++            K = MOD( C(NP, MIN(NDIM-1,KLIM-1))*DBLE(K), DBLE(P(NP)) )
++            VK(I) = K*VK(1)
++         ELSE
++            VK(I) = INT( P(NP)*2**( DBLE(I-KLIM)/(NDIM-KLIM+1) ) )
++            VK(I) = MOD( VK(I)/P(NP), ONE )
++         END IF
++      END DO
++      DO K = 1, NF
++         FINVAL(K) = 0
++         VARSQR(K) = 0
++      END DO
++*
++      DO I = 1, SAMPLS
++         CALL MVKRSV( NDIM,KLIM,VALUES, P(NP),VK, NF,FUNSUB, X,R,PR,FS )
++         DO K = 1, NF
++            DIFINT = ( VALUES(K) - FINVAL(K) )/I
++            FINVAL(K) = FINVAL(K) + DIFINT
++            VARSQR(K) = ( I - 2 )*VARSQR(K)/I + DIFINT**2
++         END DO
++      END DO
++*
++      INTVLS = INTVLS + 2*SAMPLS*P(NP)
++      KMX = 1
++      DO K = 1, NF
++         VARPRD = VAREST(K)*VARSQR(K)
++         FINEST(K) = FINEST(K) + ( FINVAL(K) - FINEST(K) )/( 1+VARPRD )      
++         IF ( VARSQR(K) .GT. 0 ) VAREST(K) = ( 1 + VARPRD )/VARSQR(K)
++         IF ( ABS(FINEST(K)) .GT. ABS(FINEST(KMX)) ) KMX = K
++      END DO
++      ABSERR = 7*SQRT( VARSQR(KMX)/( 1 + VARPRD ) )/2
++      IF ( ABSERR .GT. MAX( ABSEPS, ABS(FINEST(KMX))*RELEPS ) ) THEN
++         IF ( NP .LT. PLIM ) THEN
++            NP = NP + 1
++         ELSE
++            SAMPLS = MIN( 3*SAMPLS/2, ( MAXVLS - INTVLS )/( 2*P(NP) ) ) 
++            SAMPLS = MAX( MINSMP, SAMPLS )
++         ENDIF
++         IF ( INTVLS + 2*SAMPLS*P(NP) .LE. MAXVLS ) GO TO 10
++      ELSE
++         INFORM = 0
++      ENDIF
++      MINVLS = INTVLS
+ *
+       END
+ *
+@@ -1484,14 +1237,16 @@
+             IF ( R(J) .GT. 1 ) R(J) = R(J) - 1
+             X(J) = ABS( 2*R(J) - 1 )
+          END DO
+-         CALL FUNSUB( NDIM, X, NF, FS )
++         CALL FUNSUB( NDIM, X, FS )
++*     This was FUNSUB( NDIM, X, NF, FS )
+          DO J = 1, NF
+             VALUES(J) = VALUES(J) + ( FS(J) - VALUES(J) )/( 2*K-1 )      
+          END DO
+          DO J = 1, NDIM
+             X(J) = 1 - X(J)
+          END DO
+-         CALL FUNSUB( NDIM, X, NF, FS )
++         CALL FUNSUB( NDIM, X, FS )
++*     This was FUNSUB( NDIM, X, NF, FS )
+          DO J = 1, NF
+             VALUES(J) = VALUES(J) + ( FS(J) - VALUES(J) )/( 2*K )      
+          END DO
+@@ -1504,11 +1259,10 @@
+ *     Uniform (0,1) random number generator
+ *
+ *     use R's random number generator directly
+-*     the way `Writing R extentions' advertises.
++*     the way `Writing R extensions' advertises.
+ *
+       DOUBLE PRECISION unifrnd, x
+ 
+       x = unifrnd()
+       MVUNI = x
+       END
+-
+diff --git a/external_libs/mvtnorm/mvtnorm.cpp b/external_libs/mvtnorm/mvtnorm.cpp
+index 94a83b2..07825a8 100644
+--- a/external_libs/mvtnorm/mvtnorm.cpp
++++ b/external_libs/mvtnorm/mvtnorm.cpp
+@@ -1,4 +1,4 @@
+-
++#include <algorithm>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include "mvtnorm.h"
+@@ -47,9 +47,9 @@ double pmvnorm_complement(int n,
+     double* error)
+ {
+   int nu_ = 0;
+-  int maxpts_ = maxpts;
+-  double abseps_ = abseps;
+-  double releps_ = 0;
++  int maxpts_ = std::max(maxpts, n * 1000);
++  double abseps_ = std::min(abseps, 1.0 / (n * 1000));
++  double releps_ = 0.0;
+ 
+   double* upper = new double[n];
+   int* infin = new int[n];
+@@ -63,7 +63,7 @@ double pmvnorm_complement(int n,
+ 
+   // values to return
+   double value_ = 0.0;
+-  int inform_ = 0.0;
++  int inform_ = 0;
+ 
+   double ret = pmvnorm(&n, &nu_, 
+       bound, upper, infin, cmat, delta, 
+diff --git a/external_libs/pgenlib/Makefile b/external_libs/pgenlib/Makefile
+index 262d920..5640d61 100644
+--- a/external_libs/pgenlib/Makefile
++++ b/external_libs/pgenlib/Makefile
+@@ -3,7 +3,7 @@
+ #
+ AR         ?= ar
+ CXX        ?= g++
+-CXXFLAGS    = -O3 -Wall -std=c++11
++CXXFLAGS    = -O3 -Wall -std=c++14
+ CFLAGS      = 
+ 
+ UNAME_S := $(shell uname -s)
+diff --git a/external_libs/qf/Makefile b/external_libs/qf/Makefile
+index 3d0341a..351dd5d 100644
+--- a/external_libs/qf/Makefile
++++ b/external_libs/qf/Makefile
+@@ -1,6 +1,6 @@
+ AR       ?= ar
+ CXX      ?= g++
+-CXXFLAGS  = -O2 -DNDEBUG -fPIC
++CXXFLAGS  = -O3 -DNDEBUG -fPIC
+ 
+ UNAME_S := $(shell uname -s)
+ ifeq ($(UNAME_S),Darwin)
+diff --git a/external_libs/quadpack/Makefile b/external_libs/quadpack/Makefile
+index e160de3..03c6e5a 100644
+--- a/external_libs/quadpack/Makefile
++++ b/external_libs/quadpack/Makefile
+@@ -1,4 +1,4 @@
+-FLAG=-O2 -DNDEBUG -fPIC -std=legacy
++FLAG=-O3 -DNDEBUG -fPIC -std=legacy
+ AR   ?= ar
+ FC   ?= gfortran
+ 
+diff --git a/external_libs/remeta/Makefile b/external_libs/remeta/Makefile
+index 195706d..7db52a0 100644
+--- a/external_libs/remeta/Makefile
++++ b/external_libs/remeta/Makefile
+@@ -3,7 +3,7 @@
+ #
+ AR         ?= ar
+ CXX        ?= g++
+-CXXFLAGS    = -O3 -Wall -std=c++17
++CXXFLAGS    = -O3 -Wall -std=c++14
+ CFLAGS      = 
+ INC         = ../eigen-3.4.0/
+ 
+@@ -25,4 +25,4 @@ remeta.a: ${OBJECTS}
+ 	${CXX} ${CXXFLAGS} -o $@ -c $< -I${INC}
+ 
+ clean:
+-	rm -f *.o *.a
+\ No newline at end of file
++	rm -f *.o *.a
+diff --git a/src/Data.cpp b/src/Data.cpp
+index 71f9fb3..95d36c4 100755
+--- a/src/Data.cpp
++++ b/src/Data.cpp
+@@ -977,6 +977,7 @@ void Data::output() {
+   if(params.write_null_firth){
+     out_firth_list = files.out_file + "_firth.list";
+     outf.openForWrite(out_firth_list, sout);
++    m_ests.blups.resize(params.n_samples, params.n_pheno);
+   }
+ 
+   for(int ph = 0; ph < params.n_pheno; ++ph ) {
+@@ -1872,25 +1873,23 @@ void Data::write_predictions(int const& ph){
+   if(params.write_null_firth){ // store null estimates for Firth
+ 
+     bool has_converged = true;
+-    double dev, tstat;
+-    ArrayXd se, etavec, pivec;
+     IOFormat Fmt(StreamPrecision, DontAlignCols, " ", "\n", "", "","","");
+ 
+     out = files.out_file + "_" + to_string(ph+1) + ".firth" + (params.gzOut ? ".gz" : "");
+     sout << "writing null approximate Firth estimates..." << flush;
+     ofile.openForWrite(out, sout);
+ 
+-    ArrayXd bhat = ArrayXd::Zero(params.ncov);
+     MapArXd Y (pheno_data.phenotypes_raw.col(ph).data(), pheno_data.phenotypes_raw.rows());
+     MapArXb mask (pheno_data.masked_indivs.col(ph).data(), pheno_data.masked_indivs.rows());
++    // not quite matching with step 2 due to offset not being used in logreg
++    ArrayXd bhat = m_ests.bhat_start.col(ph).array();
+ 
+     for(int chr = 0; chr < params.nChrom; chr++) {
+-      // fit null approximate Firth 
++      // fit null approximate Firth
+       // use warm starts from previous chromosomes
+-      if(!fit_firth(ph, Y, pheno_data.new_cov, pred.col(chr).array(), mask, pivec, etavec, bhat, se, params.ncov, dev, false, tstat, params.maxstep_null, params.niter_max_firth_null, 50 * params.numtol, &params)){
+-        has_converged = false;
+-        break;
+-      }
++      m_ests.blups.col(ph) = pred.col(chr);
++      has_converged = fit_approx_firth_null(chr, ph, &pheno_data, &m_ests, bhat, &params);
++      if(!has_converged) break;
+       ofile << chr + 1 << " " << bhat.matrix().transpose().format(Fmt) << endl;
+     }
+ 
+@@ -1902,7 +1901,6 @@ void Data::write_predictions(int const& ph){
+ 
+   }
+ 
+-
+   if(params.print_prs){
+ 
+     out = files.out_file + "_" + to_string(ph+1) + ".prs" + (params.gzOut ? ".gz" : "");
+diff --git a/src/NNLS.cpp b/src/NNLS.cpp
+index 43d9d7b..98e4ec0 100644
+--- a/src/NNLS.cpp
++++ b/src/NNLS.cpp
+@@ -30,6 +30,33 @@
+ using namespace Eigen;
+ using namespace std;
+ 
++/***************************************
++ * NLLS: the main function: 
++ * - model fitting
++ * - update V matrix & compute weigts
++ * - compute p-values using chi2bar 
++ * - return min(pval_pos_nnls, pval_neg_nnls)
++***************************************/
++
++Eigen::MatrixXd _npd(const Eigen::MatrixXd& X, double eps = 1e-8)
++{
++  // method 1: diag(X) = diag(X) + eps
++  /* V = 0.5 * (V + V.transpose()); // force it symmetric */
++  /* double eps = 1e-4; // to be a function argument */
++  /* V.diagonal().array() += eps; // force positive-definite */
++  
++  // method 2: EVD (negative eigenvalues -> 0) + diag(X) = diag(X) + eps
++  MatrixXd Y = 0.5 * (X + X.transpose());
++  SelfAdjointEigenSolver<MatrixXd> solver(Y);
++  VectorXd D = solver.eigenvalues();
++  MatrixXd V = solver.eigenvectors();
++  VectorXd Dplus = D.cwiseMax(0.0);
++  MatrixXd Z = V * Dplus.asDiagonal() * V.transpose();
++  Z.diagonal().array() += eps;
++
++  return(Z);
++}
++
+ /****************************************************
+  * Compute weights for the NNLS test
+  * ic.weights function in the R package ic.infer
+@@ -38,7 +65,8 @@ using namespace std;
+ Eigen::MatrixXd _inverse(const Eigen::MatrixXd& V)
+ {
+   int n = V.rows();
+-  MatrixXd Vinv = V.llt().solve(MatrixXd::Identity(n, n));
++  MatrixXd Vpd = _npd(V);
++  MatrixXd Vinv = Vpd.llt().solve(MatrixXd::Identity(n, n));
+   /* MatrixXd Vinv = V.inverse(); */
+   return(Vinv);
+ }
+@@ -240,6 +268,8 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
+   double* cmat = new double[nc];
+   double error, ret; 
+ 
++  Eigen::MatrixXd Apd = _npd(A);  
++  
+   // fill n bounds with 0
+   for(i = 0; i < n; ++i) {
+     bound[i] = 0.0;
+@@ -250,7 +280,7 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
+   /* Eigen::MatrixXd C = wts_cov2cor(A); */
+   vector<double> sd(n);
+   for(int i = 0; i < n; ++i) {
+-    sd[i] = sqrt(A(i, i));
++    sd[i] = sqrt(Apd(i, i));
+   }
+   
+ 
+@@ -260,7 +290,7 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
+   k = 0; // counter for filled entries in cmat
+   for(i = 0; i < n; ++i) {
+     for(j = 0; j < i; ++j) {
+-      cmat[k] = A(i, j) / (sd[i]*sd[j]);
++      cmat[k] = Apd(i, j) / (sd[i]*sd[j]);
+       k += 1;
+       /* file << cmat[k] << "\t"; */
+     }
+@@ -1049,33 +1079,6 @@ int jburden_wts_adapt(const Eigen::MatrixXd& V, Eigen::VectorXd& wts_out, std::m
+   return(0);
+ }
+ 
+-/***************************************
+- * NLLS: the main function: 
+- * - model fitting
+- * - update V matrix & compute weigts
+- * - compute p-values using chi2bar 
+- * - return min(pval_pos_nnls, pval_neg_nnls)
+-***************************************/
+-
+-Eigen::MatrixXd _npd(const Eigen::MatrixXd& X, double eps = 1e-6)
+-{
+-  // method 1: diag(X) = diag(X) + eps
+-  /* V = 0.5 * (V + V.transpose()); // force it symmetric */
+-  /* double eps = 1e-4; // to be a function argument */
+-  /* V.diagonal().array() += eps; // force positive-definite */
+-  
+-  // method 2: EVD (negative eigenvalues -> 0) + diag(X) = diag(X) + eps
+-  MatrixXd Y = 0.5 * (X + X.transpose());
+-  SelfAdjointEigenSolver<MatrixXd> solver(Y);
+-  VectorXd D = solver.eigenvalues();
+-  MatrixXd V = solver.eigenvectors();
+-  VectorXd Dplus = D.cwiseMax(0.0);
+-  MatrixXd Z = V * Dplus.asDiagonal() * V.transpose();
+-  Z.diagonal().array() += eps;
+-
+-  return(Z);
+-}
+-
+ // main function for the NNLS test
+ double jburden_test(const Eigen::VectorXd &y, const Eigen::MatrixXd& X, std::mt19937_64& gen,
+   int df, double tol, int n_approx, bool strict, int verbose)
+diff --git a/src/NNLS.hpp b/src/NNLS.hpp
+index 1ab40be..6fcfe63 100644
+--- a/src/NNLS.hpp
++++ b/src/NNLS.hpp
+@@ -66,7 +66,7 @@ int jburden_wts_adapt(const Eigen::MatrixXd& V, Eigen::VectorXd& wts_out, std::m
+ 
+ // compute CDF for MVN
+ double jburden_pnorm(const Eigen::MatrixXd& A, 
+-  int maxpts = 25000, double abseps = 1e-3, int verbose = 0);
++  int maxpts = 50000, double abseps = 1e-3, int verbose = 0);
+ // the active set algorithm for fitting NNLS
+ int jburden_fit_nnls(const Eigen::VectorXd &y, const Eigen::MatrixXd& X, 
+   Eigen::VectorXd& bhat_out, vector<bool>& selected_out,
+diff --git a/src/Step1_Models.cpp b/src/Step1_Models.cpp
+index b72daa8..a5c9a6b 100644
+--- a/src/Step1_Models.cpp
++++ b/src/Step1_Models.cpp
+@@ -59,7 +59,7 @@ void fit_null_logistic(bool const& silent, const int& chrom, struct param* param
+   auto t1 = std::chrono::high_resolution_clock::now();
+   ArrayXd betaold, etavec, pivec, loco_offset, wvec;
+   MatrixXd XtW;
+-  if(params->w_interaction || params->firth || (params->use_SPA && params->vc_test)) m_ests->bhat_start.resize(pheno_data->new_cov.cols(), params->n_pheno);
++  if(params->w_interaction || params->firth || (params->use_SPA && params->vc_test) || params->write_null_firth) m_ests->bhat_start.resize(pheno_data->new_cov.cols(), params->n_pheno);
+   if(params->w_interaction) m_ests->offset_nullreg.resize(pheno_data->new_cov.rows(), params->n_pheno);
+   betaold = ArrayXd::Zero(pheno_data->new_cov.cols());
+ 
+@@ -132,7 +132,10 @@ void fit_null_logistic(bool const& silent, const int& chrom, struct param* param
+       getBasis(m_ests->X_Gamma[i], params);
+       if(params->w_interaction || params->firth || (params->use_SPA && params->vc_test)) m_ests->bhat_start.col(i) = betaold.matrix();
+       if(params->w_interaction) m_ests->offset_nullreg.col(i) = etavec;
+-    } else m_ests->offset_nullreg.col(i) = etavec;
++    } else {
++      m_ests->offset_nullreg.col(i) = etavec;
++      if(params->write_null_firth) m_ests->bhat_start.col(i) = betaold.matrix();
++    }
+ 
+     /*
+      Files fstar;

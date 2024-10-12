@@ -1,0 +1,65 @@
+{% set name = "regenie" %}
+{% set version = "3.6" %}
+{% set sha256 = "bb935b196da08ef7b37dad9736022030a686ae84539c47c106de6096d4612e09" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  url: https://github.com/rgcgithub/regenie/archive/v3.6.tar.gz
+  sha256: {{ sha256 }}
+  patches:
+    # Fixing post-release issues
+    - patches/0015-update-inverse-and-eps.patch
+build:
+  number: 0
+  run_exports:
+    - {{ pin_subpackage('regenie', max_pin="x") }}
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ compiler('cxx') }}
+    - {{ compiler('fortran') }}
+    - binutils   # [linux]
+    - cmake >3.13 
+    - make
+    - llvm-openmp  # [osx]
+    - libgomp  # [linux]
+  host:
+    - boost-cpp==1.82 
+    - boost==1.82 
+    - liblapack * *mkl
+    - sqlite
+    - libsqlite
+    - mkl 
+    - mkl-include
+    - zlib
+    - zstd
+  run:
+    - boost-cpp==1.82 
+    - mkl 
+    - sqlite
+    - zlib
+    - zstd
+
+test:
+  commands:
+    - test -f ${PREFIX}/bin/regenie  # [linux]
+    - regenie --help
+    - regenie --version
+
+about:
+  home: https://rgcgithub.github.io/regenie/
+  license: MIT
+  license_family: MIT
+  license_file: LICENSE
+  summary: 'Regenie is a C++ program for whole genome regression modelling of large genome-wide association studies (GWAS).'
+  dev_url: https://github.com/rgcgithub/regenie
+  doc_url: https://rgcgithub.github.io/regenie/options/
+
+extra:
+  recipe-maintainers:
+    - matuskosut
+    - joellembatchou

@@ -382,13 +382,16 @@ index 0000000..e49ffbe
 Binary files /dev/null and b/binary/regenie-3.6-h6578b86_0.tar.bz2 differ
 diff --git a/external_libs/mvtnorm/C_FORTRAN_interface.cpp b/external_libs/mvtnorm/C_FORTRAN_interface.cpp
 new file mode 100644
-index 0000000..ea8ffac
+index 0000000..8ebbc7a
 --- /dev/null
 +++ b/external_libs/mvtnorm/C_FORTRAN_interface.cpp
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,40 @@
 +#include "mvtnorm.h"
 +#include <random>
 +#include <cmath>
++
++// Define the F77_SUB macro
++#define F77_SUB(x) x##_
 +
 +// Random number generator
 +std::random_device rd;

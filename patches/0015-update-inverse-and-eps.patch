@@ -369,16 +369,92 @@ index b0cc536..aa496e6 100755
  
  EFILE         = regenie
  CFLAGS       ?=
+diff --git a/binary/notes.dat b/binary/notes.dat
+new file mode 100644
+index 0000000..6f60d8b
+--- /dev/null
++++ b/binary/notes.dat
+@@ -0,0 +1 @@
++compiled binary with conda-reipe fixing glibc issue.
+diff --git a/binary/regenie-3.6-h6578b86_0.tar.bz2 b/binary/regenie-3.6-h6578b86_0.tar.bz2
+new file mode 100644
+index 0000000..e49ffbe
+Binary files /dev/null and b/binary/regenie-3.6-h6578b86_0.tar.bz2 differ
+diff --git a/external_libs/mvtnorm/C_FORTRAN_interface.cpp b/external_libs/mvtnorm/C_FORTRAN_interface.cpp
+new file mode 100644
+index 0000000..ea8ffac
+--- /dev/null
++++ b/external_libs/mvtnorm/C_FORTRAN_interface.cpp
+@@ -0,0 +1,37 @@
++#include "mvtnorm.h"
++#include <random>
++#include <cmath>
++
++// Random number generator
++std::random_device rd;
++std::mt19937 gen(rd());
++std::uniform_real_distribution<> dis(0.0, 1.0);
++
++double F77_SUB(unifrnd)(void) { return dis(gen); }
++
++double F77_SUB(sqrtqchisqint)(int* n, double* p) {
++    // Use the chi-squared distribution from <random> and <cmath>
++    std::chi_squared_distribution<> chi2(*n);
++    return std::sqrt(chi2(gen) * (*p));
++}
++
++double F77_SUB(phid)(double* x) {
++    // Standard normal CDF using <cmath>
++    return 0.5 * std::erfc(-(*x) * M_SQRT1_2);
++}
++
++double F77_SUB(studnt)(int* nu, double* x) {
++    // Student's t-distribution CDF using <cmath>
++    std::student_t_distribution<> t(*nu);
++    return t(gen) * (*x);
++}
++
++double F77_SUB(mvphi)(double const* z) {
++    // Standard normal CDF using <cmath>
++    return 0.5 * std::erfc(-(*z) * M_SQRT1_2);
++}
++
++double F77_SUB(mvphnv)(double const* p) {
++    // Inverse standard normal CDF using <cmath>
++    return std::sqrt(2) * std::erfinv(2 * (*p) - 1);
++}
 diff --git a/external_libs/mvtnorm/Makefile b/external_libs/mvtnorm/Makefile
-index ac3d389..38edafa 100644
+index ac3d389..fa94986 100644
 --- a/external_libs/mvtnorm/Makefile
 +++ b/external_libs/mvtnorm/Makefile
 @@ -1,4 +1,4 @@
 -FLAG  =-O2 -DNDEBUG -fPIC
-+FLAG  =-O3 -DNDEBUG -fPIC
++FLAG  = -O3 -DNDEBUG -fPIC
  AR   ?= ar
  CXX  ?= g++
  CC   ?= gcc
+@@ -9,17 +9,17 @@ ifeq ($(UNAME_S),Darwin)
+  FLAG += -arch x86_64
+ endif
+ 
+-libMvtnorm.a: mvtnorm.o mvt.o randomF77.o
++libMvtnorm.a: mvtnorm.o mvt.o C_FORTRAN_interface.o
+ 	${AR} rcs $@ $^ 
+ 
+ mvtnorm.o: mvtnorm.cpp mvtnorm.h
+ 	${CXX} $(FLAG) -c mvtnorm.cpp -o mvtnorm.o
+ 
+ mvt.o: mvt.f
+-	${FC} $(FLAG) -c mvt.f
++	${FC} $(FLAG) -c mvt.f -o mvt.o
+ 
+-randomF77.o: randomF77.c
+-	${CC} $(FLAG) -c randomF77.c
++C_FORTRAN_interface.o: C_FORTRAN_interface.cpp mvtnorm.h
++	${CXX} $(FLAG) -c C_FORTRAN_interface.cpp -o C_FORTRAN_interface.o
+ 
+ clean:
+ 	rm -f *.o *.a
 diff --git a/external_libs/mvtnorm/mvt.f b/external_libs/mvtnorm/mvt.f
 index 2e47d8b..9311fa9 100644
 --- a/external_libs/mvtnorm/mvt.f
@@ -956,38 +1032,76 @@ index 2e47d8b..9311fa9 100644
        MVUNI = x
        END
 -
-diff --git a/external_libs/mvtnorm/mvtnorm.cpp b/external_libs/mvtnorm/mvtnorm.cpp
-index 94a83b2..07825a8 100644
---- a/external_libs/mvtnorm/mvtnorm.cpp
-+++ b/external_libs/mvtnorm/mvtnorm.cpp
-@@ -1,4 +1,4 @@
+diff --git a/external_libs/mvtnorm/mvtnorm.h b/external_libs/mvtnorm/mvtnorm.h
+index 028cb15..acd98af 100644
+--- a/external_libs/mvtnorm/mvtnorm.h
++++ b/external_libs/mvtnorm/mvtnorm.h
+@@ -3,22 +3,34 @@
+ 
+ #ifdef __cplusplus
+ extern "C" {
++#endif
+ 
++  // Declare the Fortran functions
+   extern void mvtdst_(int* n, int* nu, double* lower, double* upper, int* infin,
+-      double* correl, double* delta, int* maxpts, double* abseps, double* releps,
+-      double* error, double* value, int* inform);
++                      double* correl, double* delta, int* maxpts, double* abseps, double* releps,
++                      double* error, double* value, int* inform);
+ 
+-#endif
++  extern void tvtlrcall_(int* NU, double* H, double* R, double* EPSI, double* TVTL);
++  extern void bvtlrcall_(int* NU, double* DH, double* DK, double* R, double* BVTL);
+ 
++  // Declare the C++ functions
+   double pmvnorm(int* n, int* nu, double* lower, double* upper,
+-      int* infin,  double* correl,  double* delta,   
+-      int* maxpts, double* abseps,  double* releps,  
+-      double* error, double* value, int* inform);    
++                 int* infin, double* correl, double* delta,
++                 int* maxpts, double* abseps, double* releps,
++                 double* error, double* value, int* inform);
+ 
+   double pmvnorm_complement(int n, int maxpts, double abseps, double* bound,
+-      double* cmat, double* error);
++                            double* cmat, double* error);
++
++  void C_tvtlr(int* NU, double* H, double* R, double* EPSI, double* TVTL);
++  void C_bvtlr(int* NU, double* DH, double* DK, double* R, double* BVTL);
++  void C_mvtdst(int* n, int* nu, double* lower, double* upper,
++                int* infin, double* corr, double* delta,
++                int* maxpts, double* abseps, double* releps,
++                double* error, double* value, int* inform, int* rnd);
+ 
+ #ifdef __cplusplus
+ }
+ #endif
++
+ #endif /* _MVT_H_ */
+diff --git a/external_libs/mvtnorm/randomF77.c b/external_libs/mvtnorm/randomF77.c
+deleted file mode 100644
+index 2e44f50..0000000
+--- a/external_libs/mvtnorm/randomF77.c
++++ /dev/null
+@@ -1,18 +0,0 @@
+-/* $Id: randomF77.c 95 2002-11-22 13:24:41Z hothorn $
+-*
+-*  wrapper for calling R's random number generator from
+-*  the original FORTRAN code
+-*
+-*/
 -
-+#include <algorithm>
- #include <stdlib.h>
- #include <stdio.h>
- #include "mvtnorm.h"
-@@ -47,9 +47,9 @@ double pmvnorm_complement(int n,
-     double* error)
- {
-   int nu_ = 0;
--  int maxpts_ = maxpts;
--  double abseps_ = abseps;
--  double releps_ = 0;
-+  int maxpts_ = std::max(maxpts, n * 1000);
-+  double abseps_ = std::min(abseps, 1.0 / (n * 1000));
-+  double releps_ = 0.0;
- 
-   double* upper = new double[n];
-   int* infin = new int[n];
-@@ -63,7 +63,7 @@ double pmvnorm_complement(int n,
- 
-   // values to return
-   double value_ = 0.0;
--  int inform_ = 0.0;
-+  int inform_ = 0;
- 
-   double ret = pmvnorm(&n, &nu_, 
-       bound, upper, infin, cmat, delta, 
+-/* #include <R.h> */
+-
+-/* void F77_SUB(rndstart)(void) { GetRNGstate(); } */
+-/* void F77_SUB(rndend)(void) { PutRNGstate(); } */
+-/* double F77_SUB(unifrnd)(void) { return unif_rand(); } */
+-
+-#include <stdlib.h>
+-
+-void rndstart_(void) {};
+-void rndend_(void) {};
+-double unifrnd_(void) { return 1.0 * rand()/RAND_MAX; };
 diff --git a/external_libs/pgenlib/Makefile b/external_libs/pgenlib/Makefile
 index 262d920..5640d61 100644
 --- a/external_libs/pgenlib/Makefile
